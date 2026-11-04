@@ -21,12 +21,12 @@ def main():
     ap.add_argument("--clean", action="store_true")
     a = ap.parse_args()
     if a.clean:
-        for exp in sorted((ROOT / "experiments").iterdir()):
+        for exp in sorted((ROOT / "experiments").glob("*/")):
             if (exp / "run.py").exists():
                 subprocess.run([sys.executable, "run.py", "--clean"], cwd=exp)
         return
     rows, failed = [], False
-    for exp in sorted((ROOT / "experiments").iterdir()):
+    for exp in sorted((ROOT / "experiments").glob("*/")):
         if not (exp / "run.py").exists():
             continue
         cmd = [sys.executable, "run.py"] + ([] if a.full else ["--quick"])
