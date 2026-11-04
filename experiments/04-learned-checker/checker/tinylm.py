@@ -1,13 +1,16 @@
-"""Tiny character-level GPT members and the tiny judge, both GPU-aware.
+"""Tiny character-level GPT members and the tiny judge, trained K at a time on one GPU.
 
-Members are the same architecture as experiment 01 (2 layers, d=64, ~103k parameters).
-The judge reuses the same body and swaps the next-character head for a single
-"is this sum right?" logit read at the end-of-answer token.
+Every tensor carries a leading model axis K, so a whole swarm (e.g. 24 members across
+3 seeds) trains in one process as one batched computation. The models never share
+weights or data; this is only a faster way to run K independent trainings, which keeps
+the GPU busy instead of launching thousands of tiny kernels per model.
+
+Members match experiment 01's shape (2 layers, d=64, 4 heads, ~103k parameters).
+The judge has the same body with a single "is this sum right?" output read at '$'.
 """
 from __future__ import annotations
 
 import math
-import random
 import time
 from dataclasses import asdict, dataclass
 
@@ -15,9 +18,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .tasks import Problem, make_problems
+from .tasks import make_problems
 
-VOCAB = list("0123456789+=$")  # '$' = end of answer
+VOCAB = list("0123456789+=$")  # '$' = end of answer (also padding)
 STOI = {c: i for i, c in enumerate(VOCAB)}
 EOS = STOI["$"]
 ALLOWED = set(VOCAB) - {"$"}
@@ -43,117 +46,125 @@ class TinyConfig:
     block: int = 24
 
 
-class Block(nn.Module):
-    def __init__(self, c: TinyConfig):
+def _ln(x, w, b):
+    return F.layer_norm(x, x.shape[-1:]) * w[:, None, None, :] + b[:, None, None, :]
+
+
+def _lin(x, w, b):  # x [K,B,T,i], w [K,i,o], b [K,o]
+    return torch.einsum("kbti,kio->kbto", x, w) + b[:, None, None, :]
+
+
+class Stacked(nn.Module):
+    """K independent transformers. out=len(VOCAB) for members, out=1 for judges."""
+
+    def __init__(self, c: TinyConfig, K: int, out: int):
         super().__init__()
-        self.ln1 = nn.LayerNorm(c.d_model)
-        self.attn = nn.MultiheadAttention(c.d_model, c.n_head, batch_first=True)
-        self.ln2 = nn.LayerNorm(c.d_model)
-        self.mlp = nn.Sequential(nn.Linear(c.d_model, 4 * c.d_model), nn.GELU(), nn.Linear(4 * c.d_model, c.d_model))
+        self.c, self.K, self.out = c, K, out
+        d, V = c.d_model, len(VOCAB)
 
-    def forward(self, x, mask):
-        h = self.ln1(x)
-        x = x + self.attn(h, h, h, attn_mask=mask, need_weights=False)[0]
-        return x + self.mlp(self.ln2(x))
+        def P(*shape, std=0.02):
+            return nn.Parameter(torch.randn(K, *shape) * std)
 
+        def Z(*shape):
+            return nn.Parameter(torch.zeros(K, *shape))
 
-class Body(nn.Module):
-    def __init__(self, c: TinyConfig):
-        super().__init__()
-        self.c = c
-        self.tok = nn.Embedding(len(VOCAB), c.d_model)
-        self.pos = nn.Embedding(c.block, c.d_model)
-        self.blocks = nn.ModuleList(Block(c) for _ in range(c.n_layer))
-        self.ln = nn.LayerNorm(c.d_model)
+        def O(*shape):
+            return nn.Parameter(torch.ones(K, *shape))
+
+        self.tok, self.pos = P(V, d), P(c.block, d)
+        self.layers = nn.ModuleList()
+        for _ in range(c.n_layer):
+            L = nn.ParameterDict({"ln1w": O(d), "ln1b": Z(d), "qkv": P(d, 3 * d), "qkvb": Z(3 * d),
+                                  "proj": P(d, d, std=0.02 / math.sqrt(2 * c.n_layer)), "projb": Z(d),
+                                  "ln2w": O(d), "ln2b": Z(d), "fc1": P(d, 4 * d), "fc1b": Z(4 * d),
+                                  "fc2": P(4 * d, d, std=0.02 / math.sqrt(2 * c.n_layer)), "fc2b": Z(d)})
+            self.layers.append(L)
+        self.lnw, self.lnb = O(d), Z(d)
+        self.head, self.headb = P(d, out), Z(out)
+
+    def params_per_model(self) -> int:
+        return sum(p.numel() for p in self.parameters()) // self.K
+
+    def subset(self, ks: list[int]) -> "Stacked":
+        m = Stacked(self.c, len(ks), self.out).to(self.tok.device)
+        idx = torch.tensor(ks, device=self.tok.device)
+        with torch.no_grad():
+            for (_, p_new), (_, p_old) in zip(m.named_parameters(), self.named_parameters()):
+                p_new.copy_(p_old.index_select(0, idx))
+        return m
+
+    def hidden(self, idx):  # idx [K,B,T] -> [K,B,T,d]
+        K, B, T = idx.shape
+        d, H = self.c.d_model, self.c.n_head
+        kk = torch.arange(K, device=idx.device)[:, None, None]
+        x = self.tok[kk, idx] + self.pos[:, None, :T, :]
+        for L in self.layers:
+            h = _ln(x, L["ln1w"], L["ln1b"])
+            q, k, v = _lin(h, L["qkv"], L["qkvb"]).split(d, -1)
+            q, k, v = (t.reshape(K * B, T, H, d // H).transpose(1, 2) for t in (q, k, v))
+            a = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+            a = a.transpose(1, 2).reshape(K, B, T, d)
+            x = x + _lin(a, L["proj"], L["projb"])
+            h = _ln(x, L["ln2w"], L["ln2b"])
+            x = x + _lin(F.gelu(_lin(h, L["fc1"], L["fc1b"])), L["fc2"], L["fc2b"])
+        return _ln(x, self.lnw, self.lnb)
 
     def forward(self, idx):
-        T = idx.shape[1]
-        mask = torch.triu(torch.ones(T, T, dtype=torch.bool, device=idx.device), 1)
-        x = self.tok(idx) + self.pos(torch.arange(T, device=idx.device))
-        for b in self.blocks:
-            x = b(x, mask)
-        return self.ln(x)
+        return _lin(self.hidden(idx), self.head, self.headb)
 
-
-class TinyGPT(nn.Module):
-    """A swarm member: predicts the next character."""
-
-    def __init__(self, c: TinyConfig):
-        super().__init__()
-        self.c = c
-        self.body = Body(c)
-        self.head = nn.Linear(c.d_model, len(VOCAB))
-
-    def n_params(self) -> int:
-        return sum(p.numel() for p in self.parameters())
-
-    def forward(self, idx):
-        return self.head(self.body(idx))
-
+    # ------------------------------------------------------------------ member sampling
     @torch.no_grad()
-    def sample(self, prompts: list[str], temperature: float = 1.0, max_new: int = 6,
-               generator: torch.Generator | None = None) -> list[str]:
-        """One completion per prompt (all prompts share a length). Fully batched, GPU-friendly."""
+    def sample(self, prompts: list[str], temperature: float, generator: torch.Generator | None = None,
+               max_new: int = 6) -> list[list[str]]:
+        """One completion per prompt per model -> [K][B] strings. Prompts share a length."""
         self.eval()
-        dev = next(self.parameters()).device
-        idx = torch.tensor([encode(p) for p in prompts], device=dev)
-        B = idx.shape[0]
-        out = torch.full((B, max_new), EOS, device=dev)
-        done = torch.zeros(B, dtype=torch.bool, device=dev)
+        dev = self.tok.device
+        idx = torch.tensor([encode(p) for p in prompts], device=dev)[None].expand(self.K, -1, -1).contiguous()
+        K, B, _ = idx.shape
+        out = torch.full((K, B, max_new), EOS, device=dev)
+        done = torch.zeros(K, B, dtype=torch.bool, device=dev)
         for t in range(max_new):
-            logits = self(idx[:, -self.c.block:])[:, -1, :]
+            logits = self(idx[:, :, -self.c.block:])[:, :, -1, :].float()
             if temperature <= 0:
                 nxt = logits.argmax(-1)
             else:
-                probs = F.softmax(logits.float() / temperature, -1)
-                nxt = torch.multinomial(probs.cpu(), 1, generator=generator).squeeze(-1).to(dev)
+                u = torch.rand(logits.shape, device=dev, generator=generator).clamp_(1e-10, 1.0)
+                nxt = (logits / temperature - torch.log(-torch.log(u))).argmax(-1)  # Gumbel-max sampling
             nxt = torch.where(done, torch.full_like(nxt, EOS), nxt)
-            out[:, t] = nxt
+            out[:, :, t] = nxt
             done |= nxt == EOS
             if bool(done.all()):
                 break
-            idx = torch.cat([idx, nxt[:, None]], 1)
+            idx = torch.cat([idx, nxt[:, :, None]], 2)
         res = []
-        for row in out.tolist():
-            s = []
-            for i in row:
-                if i == EOS:
-                    break
-                s.append(i)
-            res.append(decode(s))
+        for mk in out.tolist():
+            row = []
+            for seq in mk:
+                s = []
+                for i in seq:
+                    if i == EOS:
+                        break
+                    s.append(i)
+                row.append(decode(s))
+            res.append(row)
         return res
 
-
-class Judge(nn.Module):
-    """Reads 'a+b=c$' and outputs one logit: is c the right sum?"""
-
-    def __init__(self, c: TinyConfig):
-        super().__init__()
-        self.c = c
-        self.body = Body(c)
-        self.head = nn.Linear(c.d_model, 1)
-
-    def n_params(self) -> int:
-        return sum(p.numel() for p in self.parameters())
-
-    def forward(self, idx, last):
-        h = self.body(idx)
-        return self.head(h[torch.arange(idx.shape[0], device=idx.device), last]).squeeze(-1)
-
+    # ------------------------------------------------------------------ judge scoring
     @torch.no_grad()
-    def score(self, strings: list[str], bs: int = 4096) -> list[float]:
-        """P(correct) for each 'a+b=c' string. Unparseable strings score 0."""
+    def score(self, strings: list[str], bs: int = 8192) -> torch.Tensor:
+        """P(correct) from each of the K judges for each 'a+b=c' string -> [K, N]. Junk scores 0."""
         self.eval()
-        dev = next(self.parameters()).device
-        out = [0.0] * len(strings)
+        dev = self.tok.device
+        res = torch.zeros(self.K, len(strings))
         ok = [i for i, s in enumerate(strings) if 0 < len(s) < self.c.block and set(s) <= ALLOWED]
-        for k in range(0, len(ok), bs):
-            ids = ok[k:k + bs]
+        for j in range(0, len(ok), bs):
+            ids = ok[j:j + bs]
             x, last = pack([strings[i] for i in ids], dev)
-            p = torch.sigmoid(self(x, last).float()).tolist()
-            for i, v in zip(ids, p):
-                out[i] = v
-        return out
+            h = self.hidden(x[None].expand(self.K, -1, -1))
+            logit = _lin(h, self.head, self.headb)[..., 0]                       # [K,B,T]
+            p = torch.sigmoid(logit.gather(2, last[None, :, None].expand(self.K, -1, 1))[..., 0].float())
+            res[:, ids] = p.cpu()
+        return res
 
 
 def pack(strings: list[str], dev) -> tuple[torch.Tensor, torch.Tensor]:
@@ -162,21 +173,7 @@ def pack(strings: list[str], dev) -> tuple[torch.Tensor, torch.Tensor]:
     x = torch.full((len(seqs), L), EOS, dtype=torch.long)
     for i, s in enumerate(seqs):
         x[i, :len(s)] = torch.tensor(s)
-    last = torch.tensor([len(s) - 1 for s in seqs])
-    return x.to(dev), last.to(dev)
-
-
-def _lm_batch(problems: list[Problem], rng: random.Random, bs: int):
-    ps = [problems[rng.randrange(len(problems))] for _ in range(bs)]
-    seqs = [encode(p.prompt + p.answer + "$") for p in ps]
-    L = max(map(len, seqs))
-    x = torch.full((bs, L - 1), EOS)
-    y = torch.full((bs, L - 1), -100)  # no loss on the prompt
-    for i, (s, p) in enumerate(zip(seqs, ps)):
-        x[i, : len(s) - 1] = torch.tensor(s[:-1])
-        a0 = len(p.prompt) - 1
-        y[i, a0 : len(s) - 1] = torch.tensor(s[a0 + 1 :])
-    return x, y
+    return x.to(dev), torch.tensor([len(s) - 1 for s in seqs], device=dev)
 
 
 def _cosine(opt, lr, step, steps):
@@ -184,58 +181,97 @@ def _cosine(opt, lr, step, steps):
         g["lr"] = lr * 0.5 * (1 + math.cos(math.pi * step / steps))
 
 
-def train_member(cfg: TinyConfig, seed: int, steps: int = 1250, bs: int = 64, lr: float = 3e-3,
-                 n_train: int = 4000, dev=None) -> tuple[TinyGPT, dict]:
-    """Same recipe as experiment 01: each seed sees its own random training subset (bagging)."""
+def _member_data(seed: int, n_train: int):
+    """Teacher-forcing tensors for one member's own bagged training set (no loss on the prompt)."""
+    ps = make_problems(n_train, seed=10_000 + seed)
+    L = 12  # 'abc+def=' (8) + up to 4 answer digits + '$' -> 13 tokens -> 12 transitions
+    x = torch.full((n_train, L), EOS)
+    y = torch.full((n_train, L), -100)
+    for i, p in enumerate(ps):
+        s = encode(p.prompt + p.answer + "$")
+        x[i, :len(s) - 1] = torch.tensor(s[:-1])
+        a0 = len(p.prompt) - 1
+        y[i, a0:len(s) - 1] = torch.tensor(s[a0 + 1:])
+    return x, y
+
+
+def train_members(cfg: TinyConfig, seeds: list[int], steps: int, bs: int = 64, lr: float = 3e-3,
+                  n_train: int = 4000, dev=None) -> tuple[Stacked, dict]:
+    """Train one member per seed, all at once. Each seed has its own init, data subset and batches."""
     dev = dev or device()
-    torch.manual_seed(seed)
-    rng = random.Random(seed)
-    data = make_problems(n_train, seed=10_000 + seed)
-    m = TinyGPT(cfg).to(dev)
+    K = len(seeds)
+    torch.manual_seed(seeds[0])
+    m = Stacked(cfg, K, len(VOCAB)).to(dev)
+    xs, ys = zip(*(_member_data(s, n_train) for s in seeds))
+    X, Y = torch.stack(xs).to(dev), torch.stack(ys).to(dev)                   # [K,n,L]
+    g = torch.Generator(device=dev).manual_seed(seeds[0])
     opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=0.1)
+    kk = torch.arange(K, device=dev)[:, None]
     t0 = time.time()
     m.train()
     for step in range(steps):
         _cosine(opt, lr, step, steps)
-        x, y = _lm_batch(data, rng, bs)
-        x, y = x.to(dev), y.to(dev)
-        loss = F.cross_entropy(m(x).reshape(-1, len(VOCAB)), y.reshape(-1), ignore_index=-100)
+        i = torch.randint(n_train, (K, bs), device=dev, generator=g)
+        x, y = X[kk, i], Y[kk, i]
+        # sum over models of each model's mean loss: gradients stay independent per model
+        loss = F.cross_entropy(m(x).reshape(K * bs * x.shape[2], -1), y.reshape(-1), ignore_index=-100,
+                               reduction="none").reshape(K, -1)
+        loss = (loss.sum(1) / (y != -100).reshape(K, -1).sum(1)).sum()
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
-    tokens = steps * bs * 12  # ~12 positions per "abc+def=ghij$" sequence
-    meta = {"seed": seed, "steps": steps, "bs": bs, "params": m.n_params(), "tokens": tokens,
-            "train_flops": 6 * m.n_params() * tokens, "train_seconds": time.time() - t0,
-            "device": str(dev), **asdict(cfg)}
+    if dev.type == "cuda":
+        torch.cuda.synchronize()
+    tokens = steps * bs * 12
+    meta = {"seeds": list(seeds), "steps": steps, "bs": bs, "params": m.params_per_model(), "tokens_each": tokens,
+            "train_seconds": time.time() - t0, "device": str(dev), **asdict(cfg)}
     return m, meta
 
 
-def train_judge(cfg: TinyConfig, strings: list[str], labels: list[int], seed: int, steps: int = 1500,
-                bs: int = 128, lr: float = 3e-3, dev=None) -> tuple[Judge, dict]:
-    """Class-balanced binary training on members' own sampled answers."""
+def train_judges(cfg: TinyConfig, datasets: list[tuple[list[str], list[int]]], seed: int, steps: int = 1500,
+                 bs: int = 128, lr: float = 3e-3, dev=None) -> tuple[Stacked, dict]:
+    """One class-balanced judge per (strings, labels) dataset, all trained at once."""
     dev = dev or device()
+    K = len(datasets)
     torch.manual_seed(seed)
-    rng = random.Random(seed)
-    pos = [s for s, y in zip(strings, labels) if y]
-    neg = [s for s, y in zip(strings, labels) if not y]
-    if not pos or not neg:
-        raise ValueError("judge needs both right and wrong examples")
-    j = Judge(cfg).to(dev)
+    j = Stacked(cfg, K, 1).to(dev)
+    allx, alll = pack([s for strings, _ in datasets for s in strings], "cpu")
+    pos_idx, neg_idx, off = [], [], 0
+    for strings, labels in datasets:
+        lab = torch.tensor(labels, dtype=torch.bool)
+        if lab.all() or not lab.any():
+            raise ValueError("each judge needs both right and wrong examples")
+        r = torch.arange(len(strings)) + off
+        pos_idx.append(r[lab])
+        neg_idx.append(r[~lab])
+        off += len(strings)
+    pad = lambda ts: torch.nn.utils.rnn.pad_sequence(ts, batch_first=True).to(dev)  # noqa: E731
+    P, N = pad(pos_idx), pad(neg_idx)
+    nP = torch.tensor([len(t) for t in pos_idx], device=dev)[:, None]
+    nN = torch.tensor([len(t) for t in neg_idx], device=dev)[:, None]
+    allx, alll = allx.to(dev), alll.to(dev)
+    g = torch.Generator(device=dev).manual_seed(seed)
     opt = torch.optim.AdamW(j.parameters(), lr=lr, weight_decay=0.1)
+    kk = torch.arange(K, device=dev)[:, None]
+    half = bs // 2
+    y = torch.cat([torch.ones(half), torch.zeros(half)]).to(dev)[None].expand(K, -1)
     t0 = time.time()
     j.train()
-    half = bs // 2
     for step in range(steps):
         _cosine(opt, lr, step, steps)
-        batch = [pos[rng.randrange(len(pos))] for _ in range(half)] + [neg[rng.randrange(len(neg))] for _ in range(half)]
-        x, last = pack(batch, dev)
-        y = torch.tensor([1.0] * half + [0.0] * half, device=dev)
-        loss = F.binary_cross_entropy_with_logits(j(x, last), y)
+        ip = P[kk, (torch.rand(K, half, device=dev, generator=g) * nP).long()]
+        ineg = N[kk, (torch.rand(K, half, device=dev, generator=g) * nN).long()]
+        rows = torch.cat([ip, ineg], 1)                                          # [K, bs] dataset rows
+        x, last = allx[rows], alll[rows]
+        logit = _lin(j.hidden(x), j.head, j.headb)[..., 0]
+        logit = logit.gather(2, last[..., None])[..., 0]
+        loss = F.binary_cross_entropy_with_logits(logit, y, reduction="none").mean(1).sum()
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
-    tokens = steps * bs * 12
-    meta = {"seed": seed, "steps": steps, "bs": bs, "params": j.n_params(), "tokens": tokens,
-            "train_flops": 6 * j.n_params() * tokens, "train_seconds": time.time() - t0,
-            "n_pos": len(pos), "n_neg": len(neg), "device": str(dev)}
+    if dev.type == "cuda":
+        torch.cuda.synchronize()
+    meta = {"seed": seed, "steps": steps, "bs": bs, "params": j.params_per_model(), "tokens_each": steps * bs * 12,
+            "train_seconds": time.time() - t0, "n_pos": [len(t) for t in pos_idx],
+            "n_neg": [len(t) for t in neg_idx], "device": str(dev)}
     return j, meta

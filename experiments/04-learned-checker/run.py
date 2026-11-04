@@ -1,9 +1,11 @@
 """Experiment 04: can a tiny learned judge beat the swarm's majority vote?
 
-    python run.py            # full run; trains on an NVIDIA GPU (refuses CPU)
+    python run.py            # full run; trains on an NVIDIA GPU (refuses CPU), ~1-3 min of training
     python run.py --quick    # pipeline smoke check, <60 s, CPU allowed, verdict not meaningful
     python run.py --clean    # delete cached models in data/
 
+All members of all seeds train at once in one process (stacked models, see checker/tinylm.py),
+so the GPU is used fully and the run fits Obi's ~5-minute training budget.
 Prints the PASS/FAIL table for the main run, the negative control and the perturbations,
 then writes results/verdict.json, results/results.md, results/curves.json and the plot.
 """
@@ -26,7 +28,7 @@ sys.path.insert(0, str(HERE))
 
 import criteria  # noqa: E402
 from checker.tasks import make_problems  # noqa: E402
-from checker.tinylm import Judge, TinyConfig, TinyGPT, device, train_judge, train_member  # noqa: E402
+from checker.tinylm import Stacked, TinyConfig, VOCAB, device, train_judges, train_members  # noqa: E402
 
 DATA = HERE / "data"        # git-ignored model cache
 RESULTS = HERE / "results"
@@ -46,33 +48,27 @@ INTRIGUING = None  # optional SOP v0.6 tag, set only after results exist; never 
 
 # ----------------------------------------------------------------------------- cached training
 
-def _cached(path: Path, build, cls, cfg):
+def _cached(tag: str, build, cfg, out):
+    path = DATA / f"{tag}.pt"
     if path.exists():
         blob = torch.load(path, weights_only=False, map_location=device())
-        m = cls(cfg).to(device())
+        m = Stacked(cfg, blob["K"], out).to(device())
         m.load_state_dict(blob["state"])
         return m, {**blob["meta"], "cached": True}
     m, meta = build()
     DATA.mkdir(exist_ok=True)
-    torch.save({"state": m.state_dict(), "meta": meta}, path)
+    torch.save({"state": m.state_dict(), "meta": meta, "K": m.K}, path)
     return m, {**meta, "cached": False}
 
 
-def member(tag, cfg, seed, steps):
-    return _cached(DATA / f"{tag}.pt", lambda: train_member(cfg, seed=seed, steps=steps, bs=MEMBER_BS), TinyGPT, cfg)
+def members(tag, cfg, seeds, steps):
+    return _cached(tag, lambda: train_members(cfg, seeds, steps, bs=MEMBER_BS), cfg, len(VOCAB))
 
 
-def judge(tag, cfg, strings, labels, seed, P):
-    return _cached(DATA / f"{tag}.pt",
-                   lambda: train_judge(cfg, strings, labels, seed=seed, steps=P["judge_steps"], bs=P["judge_bs"]),
-                   Judge, cfg)
-
-
-def samples_of(m, prompts, S, T, seed):
-    g = torch.Generator().manual_seed(seed)
-    return np.array([m.sample(prompts, temperature=T, generator=g) for _ in range(S)], dtype=object)  # [S, Q]
-
-
+def samples_of(m: Stacked, prompts, S, T, seed):
+    """[K, S, Q] sampled answers."""
+    g = torch.Generator(device=m.tok.device).manual_seed(seed)
+    return np.array([m.sample(prompts, T, generator=g) for _ in range(S)], dtype=object).transpose(1, 0, 2)
 # ----------------------------------------------------------------------------- selection
 
 def select(cands: list[str], scores: list[float]) -> str:
@@ -119,85 +115,93 @@ def auc(scores, labels):
     return float((ranks[y].sum() - y.sum() * (y.sum() + 1) / 2) / (y.sum() * (~y).sum()))
 
 
-# ----------------------------------------------------------------------------- one seed
 
-def run_seed(s, P):
+
+# ----------------------------------------------------------------------------- all seeds
+
+def run_seeds(P):
     cfg = TinyConfig(**P["model"])
-    d = P["model"]["d_model"]
-    test = make_problems(P["questions"], seed=2026 + s)
-    prompts = [p.prompt for p in test]
-    truth = np.array([p.answer for p in test], dtype=object)
-    jprob = make_problems(P["judge_problems"], seed=50_000 + s)
+    d, S, Ps = P["model"]["d_model"], P["seeds"], P["pool"]
+    seeds = range(S)
+    mseeds = [100_000 + 1000 * s + i for s in seeds for i in range(Ps)]          # same seeds as experiment 01
     train_s = 0.0
 
-    pools = {}
-    for level, steps in [("normal", P["steps"]), ("weak", P["weak_steps"])]:
-        ms = []
-        for i in range(P["pool"]):
-            m, meta = member(f"{level}_d{d}_s{steps}_seed{s}_m{i}", cfg, 100_000 + 1000 * s + i, steps)
-            train_s += 0 if meta["cached"] else meta["train_seconds"]
-            ms.append((m, meta))
-        pools[level] = ms
-    member_params = pools["normal"][0][1]["params"]
+    normal, nmeta = members(f"normal_d{d}_s{P['steps']}_S{S}_p{Ps}", cfg, mseeds, P["steps"])
+    weak, wmeta = members(f"weak_d{d}_s{P['weak_steps']}_S{S}_p{Ps}", cfg, mseeds, P["weak_steps"])
+    matched_steps = math.ceil((4 * P["steps"] * MEMBER_BS + P["judge_steps"] * P["judge_bs"]) / MEMBER_BS)
+    matched, mmeta = members(f"matched_d{d}_s{matched_steps}_S{S}", cfg, [200_000 + s for s in seeds], matched_steps)
+    train_s += sum(0 if m["cached"] else m["train_seconds"] for m in (nmeta, wmeta, mmeta))
+    print(f"members trained: normal {nmeta['train_seconds']:.0f}s, weak {wmeta['train_seconds']:.0f}s, "
+          f"matched ({matched_steps} steps) {mmeta['train_seconds']:.0f}s")
+    member_params = nmeta["params"]
 
-    # judge training data: the normal members' own sampled answers to fresh problems
-    strings, labels = [], []
-    for i, (m, _) in enumerate(pools["normal"]):
-        sm = samples_of(m, [p.prompt for p in jprob], P["judge_samples"], TEMPERATURE, 400_000 + 1000 * s + i)
-        for row in sm:
+    # judge training data: each seed's normal members' own sampled answers to fresh problems
+    datasets, shuffled = [], []
+    for s in seeds:
+        jprob = make_problems(P["judge_problems"], seed=50_000 + s)
+        pool = normal.subset(list(range(s * Ps, (s + 1) * Ps)))
+        sm = samples_of(pool, [p.prompt for p in jprob], P["judge_samples"], TEMPERATURE, 400_000 + s)
+        strings, labels = [], []
+        for row in sm.reshape(-1, len(jprob)):
             for p, a in zip(jprob, row):
                 strings.append(p.prompt + a)
                 labels.append(int(a == p.answer))
-    rng = np.random.default_rng(s)
-    shuffled = list(rng.permutation(labels))
-    jcfg = TinyConfig(**P["model"])
-    J, jmeta = judge(f"judge_d{d}_seed{s}", jcfg, strings, labels, 300_000 + s, P)
-    Jn, jnmeta = judge(f"judge_shuffled_d{d}_seed{s}", jcfg, strings, shuffled, 310_000 + s, P)
-    train_s += sum(0 if m["cached"] else m["train_seconds"] for m in (jmeta, jnmeta))
+        if not any(labels) or all(labels):  # only happens with untrained --quick members
+            print("  (smoke fallback: adding true sums so the judge has both classes)")
+            strings += [p.prompt + p.answer for p in jprob] + [p.prompt + "0" for p in jprob]
+            labels += [1] * len(jprob) + [0] * len(jprob)
+        datasets.append((strings, labels))
+        shuffled.append((strings, [int(v) for v in np.random.default_rng(s).permutation(labels)]))
+    jtag = f"judges_d{d}_s{P['judge_steps']}_S{S}"
+    judges, jmeta = _cached(jtag, lambda: train_judges(cfg, datasets + shuffled, 300_000, P["judge_steps"],
+                                                       P["judge_bs"]), cfg, 1)
+    train_s += 0 if jmeta["cached"] else jmeta["train_seconds"]
+    print(f"judges trained ({2 * S}): {jmeta['train_seconds']:.0f}s")
 
-    # compute-matched single model: 4 members' tokens + the judge's tokens
-    matched_steps = math.ceil((4 * P["steps"] * MEMBER_BS + P["judge_steps"] * P["judge_bs"]) / MEMBER_BS)
-    Mm, mmeta = member(f"matched_d{d}_s{matched_steps}_seed{s}", cfg, 200_000 + s, matched_steps)
-    train_s += 0 if mmeta["cached"] else mmeta["train_seconds"]
-    matched_acc = float(np.mean(np.array(Mm.sample(prompts, temperature=0), dtype=object) == truth))
+    runs = []
+    for s in seeds:
+        test = make_problems(P["questions"], seed=2026 + s)
+        prompts = [p.prompt for p in test]
+        truth = np.array([p.answer for p in test], dtype=object)
+        J = judges.subset([s, S + s])                         # this seed's real and shuffled-label judge
+        matched_acc = float(np.mean(np.array(matched.subset([s]).sample(prompts, 0)[0], dtype=object) == truth))
+        ks = list(range(s * Ps, (s + 1) * Ps))
 
-    def scored(ms, T, off):
-        ans = np.array([samples_of(m, prompts, P["samples"], T, 500_000 + off + 1000 * s + i)
-                        for i, (m, _) in enumerate(ms)], dtype=object)       # [M, S, Q]
-        flat = [p + a for row in ans.reshape(-1, len(prompts)) for p, a in zip(prompts, row)]
-        sc = np.array(J.score(flat)).reshape(ans.shape)
-        sn = np.array(Jn.score(flat)).reshape(ans.shape)
-        return ans, sc, sn
+        def scored(m, T, off):
+            ans = samples_of(m.subset(ks), prompts, P["samples"], T, 500_000 + off + s)   # [M, S, Q]
+            flat = [p + a for row in ans.reshape(-1, len(prompts)) for p, a in zip(prompts, row)]
+            sc = J.score(flat).numpy().reshape(2, *ans.shape)
+            return ans, sc[0], sc[1]
 
-    out = {"seed": s}
-    a, sc, sn = scored(pools["normal"], TEMPERATURE, 0)
-    out["n4"] = sweep(a, sc, sn, truth, 4, P["bootstrap"], s)
-    out["n8"] = sweep(a, sc, sn, truth, min(8, P["pool"]), P["bootstrap"], s + 1)
-    out["judge_auc"] = auc(sc.ravel(), (a == truth[None, None, :]).ravel())
-    out["shuffled_auc"] = auc(sn.ravel(), (a == truth[None, None, :]).ravel())
-    a, sc, sn = scored(pools["normal"], 1.0, 50_000)
-    out["t1_n4"] = sweep(a, sc, sn, truth, 4, P["bootstrap"], s + 2)
-    a, sc, sn = scored(pools["weak"], TEMPERATURE, 90_000)
-    out["weak_n4"] = sweep(a, sc, sn, truth, 4, P["bootstrap"], s + 3)
-    out["matched_acc"] = matched_acc
-    out["matched_steps"] = matched_steps
-    out["judge_train_pos_neg"] = [jmeta.get("n_pos"), jmeta.get("n_neg")]
-    out["metrics"] = {
-        "gap_closed_n4": gap_closed(out["n4"]),
-        "gain_judge4_vs_matched": out["n4"]["judge"] - matched_acc,
-        "judge_size_ratio": jmeta["params"] / member_params,
-        "gap_closed_weak_n4": gap_closed(out["weak_n4"]),
-    }
-    out["negative"] = {**out["metrics"], "gap_closed_n4": gap_closed(out["n4"], "shuffled_judge"),
-                       "gain_judge4_vs_matched": out["n4"]["shuffled_judge"] - matched_acc,
-                       "gap_closed_weak_n4": gap_closed(out["weak_n4"], "shuffled_judge")}
-    out["perturb"] = {"N=8": {**out["metrics"], "gap_closed_n4": gap_closed(out["n8"])},
-                      "temperature 1.0": {**out["metrics"], "gap_closed_n4": gap_closed(out["t1_n4"]),
-                                          "gain_judge4_vs_matched": out["t1_n4"]["judge"] - matched_acc}}
-    out["params"] = {"member": member_params, "judge": jmeta["params"]}
-    out["train_seconds"] = train_s
-    return out
-
+        out = {"seed": s}
+        a, sc, sn = scored(normal, TEMPERATURE, 0)
+        out["n4"] = sweep(a, sc, sn, truth, 4, P["bootstrap"], s)
+        out["n8"] = sweep(a, sc, sn, truth, min(8, Ps), P["bootstrap"], s + 1)
+        right = (a == truth[None, None, :]).ravel()
+        out["judge_auc"], out["shuffled_auc"] = auc(sc.ravel(), right), auc(sn.ravel(), right)
+        a, sc, sn = scored(normal, 1.0, 50_000)
+        out["t1_n4"] = sweep(a, sc, sn, truth, 4, P["bootstrap"], s + 2)
+        a, sc, sn = scored(weak, TEMPERATURE, 90_000)
+        out["weak_n4"] = sweep(a, sc, sn, truth, 4, P["bootstrap"], s + 3)
+        out["matched_acc"] = matched_acc
+        out["matched_steps"] = matched_steps
+        out["judge_train_pos_neg"] = [jmeta["n_pos"][s], jmeta["n_neg"][s]] if "n_pos" in jmeta else None
+        out["metrics"] = {
+            "gap_closed_n4": gap_closed(out["n4"]),
+            "gain_judge4_vs_matched": out["n4"]["judge"] - matched_acc,
+            "judge_size_ratio": jmeta["params"] / member_params,
+            "gap_closed_weak_n4": gap_closed(out["weak_n4"]),
+        }
+        out["negative"] = {**out["metrics"], "gap_closed_n4": gap_closed(out["n4"], "shuffled_judge"),
+                           "gain_judge4_vs_matched": out["n4"]["shuffled_judge"] - matched_acc,
+                           "gap_closed_weak_n4": gap_closed(out["weak_n4"], "shuffled_judge")}
+        out["perturb"] = {"N=8": {**out["metrics"], "gap_closed_n4": gap_closed(out["n8"])},
+                          "temperature 1.0": {**out["metrics"], "gap_closed_n4": gap_closed(out["t1_n4"]),
+                                              "gain_judge4_vs_matched": out["t1_n4"]["judge"] - matched_acc}}
+        out["params"] = {"member": member_params, "judge": jmeta["params"]}
+        out["train_seconds"] = train_s / S
+        runs.append(out)
+    return runs, train_s
 
 # ----------------------------------------------------------------------------- scoring + output
 
@@ -284,13 +288,11 @@ def main():
     t0 = time.time()
     dev = device()
     print(f"experiment 04 · {preset} · {dev}" + (f" ({torch.cuda.get_device_name()})" if dev.type == "cuda" else ""))
-    runs = []
-    for s in range(P["seeds"]):
-        r = run_seed(s, P)
-        runs.append(r)
-        print(f"seed {s}: vote {r['n4']['vote']:.3f} judge {r['n4']['judge']:.3f} pass {r['n4']['pass']:.3f} "
+    runs, _ = run_seeds(P)
+    for r in runs:
+        print(f"seed {r['seed']}: vote {r['n4']['vote']:.3f} judge {r['n4']['judge']:.3f} pass {r['n4']['pass']:.3f} "
               f"matched {r['matched_acc']:.3f} weak vote {r['weak_n4']['vote']:.3f} judge {r['weak_n4']['judge']:.3f} "
-              f"| trained {r['train_seconds']:.0f}s")
+              f"")
 
     metrics, neg = agg(runs, "metrics"), agg(runs, "negative")
     main_p, neg_p = score(metrics), score(neg)

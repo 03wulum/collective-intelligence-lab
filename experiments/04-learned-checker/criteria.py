@@ -45,7 +45,7 @@ CONTROLS = {
     "perturbations": ["N=8 members", "sampling temperature 1.0", "3 independent seeds"],
 }
 
-BUDGET = {"peak_ram_gb": 2.0, "disk_mb": 50.0, "train_minutes": 15.0, "quick_seconds": 60.0}
+BUDGET = {"peak_ram_gb": 2.0, "disk_mb": 50.0, "train_minutes": 10.0, "quick_seconds": 60.0}
 
 
 def check(v: float, op: str, t: float) -> bool:

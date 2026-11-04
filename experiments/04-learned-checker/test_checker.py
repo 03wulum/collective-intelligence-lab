@@ -3,7 +3,7 @@ import torch
 
 import criteria
 from checker.tasks import make_problems
-from checker.tinylm import Judge, TinyConfig, TinyGPT, train_judge
+from checker.tinylm import VOCAB, Stacked, TinyConfig, train_judges, train_members
 from run import auc, gap_closed, select, sweep, vote
 
 CFG = TinyConfig(d_model=16, n_layer=1, n_head=2)
@@ -36,22 +36,35 @@ def test_sweep_perfect_judge_closes_gap():
 
 
 def test_models_shapes_and_sizes():
-    m, j = TinyGPT(CFG), Judge(CFG)
-    assert j.n_params() <= m.n_params()
-    out = m.sample(["123+456="] * 3, temperature=0)
-    assert len(out) == 3 and all(isinstance(s, str) for s in out)
+    m, j = Stacked(CFG, 3, len(VOCAB)), Stacked(CFG, 2, 1)
+    assert j.params_per_model() <= m.params_per_model()
+    out = m.sample(["123+456="] * 4, temperature=0.7, generator=torch.Generator().manual_seed(0))
+    assert len(out) == 3 and len(out[0]) == 4 and all(isinstance(s, str) for s in out[0])
     sc = j.score(["123+456=579", "bad!", ""])
-    assert len(sc) == 3 and sc[1] == 0.0 and sc[2] == 0.0
+    assert sc.shape == (2, 3) and sc[0, 1] == 0.0 and sc[0, 2] == 0.0
+    sub = m.subset([2])
+    assert torch.equal(sub.tok[0], m.tok[2])
 
 
-def test_judge_learns_simple_rule():
+def test_stacked_models_are_independent():
+    """Training K models together must equal training each alone (no leakage across the model axis)."""
     torch.manual_seed(0)
+    m = Stacked(CFG, 2, len(VOCAB))
+    x = torch.randint(0, 12, (2, 3, 5))
+    m(x)[0].sum().backward()
+    assert m.tok.grad[1].abs().sum() == 0 and m.tok.grad[0].abs().sum() > 0
+
+
+def test_members_learn_and_judge_learns_simple_rule():
+    m, meta = train_members(CFG, [1, 2], steps=30, n_train=200, dev=torch.device("cpu"))
+    assert meta["params"] == m.params_per_model() and m.K == 2
     ps = make_problems(200, seed=1)
     strings = [p.prompt + p.answer for p in ps] + [p.prompt + "0" for p in ps]
     labels = [1] * 200 + [0] * 200
-    j, meta = train_judge(CFG, strings, labels, seed=0, steps=150, bs=64, dev=torch.device("cpu"))
+    j, jm = train_judges(CFG, [(strings, labels), (strings, labels[::-1])], seed=0, steps=150, bs=64,
+                         dev=torch.device("cpu"))
     s = j.score(strings)
-    assert auc(s, labels) > 0.9
+    assert auc(s[0].tolist(), labels) > 0.9 and auc(s[1].tolist(), labels) < 0.1
 
 
 def test_verdict_logic():

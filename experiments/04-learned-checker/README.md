@@ -14,7 +14,7 @@
 Negative control: a judge trained on shuffled labels must fail C1.
 
 ```bash
-python run.py          # full run, NVIDIA GPU only
+python run.py          # full run, NVIDIA GPU only (~1-3 min of training)
 python run.py --quick  # CPU smoke check of the pipeline (not a result)
 python run.py --clean  # delete cached models
 ```
