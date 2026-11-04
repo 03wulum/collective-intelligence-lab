@@ -1,0 +1,7 @@
+# Python 3.12. CPU-only torch: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0
+numpy==2.5.3
+scipy==1.18.1
+matplotlib==3.11.2
+PyYAML==6.0.3
+pytest==9.2.0

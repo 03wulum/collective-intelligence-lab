@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+data/
+experiments/*/data/
+experiments/*/llm/results/
+experiments/*/results/*_quick.*
+*.log

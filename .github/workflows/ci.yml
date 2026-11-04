@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Code tests
+        run: |
+          shopt -s nullglob
+          for d in experiments/*/; do (cd "$d" && python -m pytest -q) || exit 1; done
+      - name: Quick runs (verdicts do not fail CI; crashes and blown budgets do)
+        run: python run_all.py
