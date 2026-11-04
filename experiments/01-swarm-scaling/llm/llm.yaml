@@ -1,0 +1,14 @@
+# Swarm of real small LLMs served locally (Ollama / llama.cpp / LM Studio).
+base_url: http://localhost:11434/v1     # Ollama default; llama-server is http://localhost:8080/v1
+models: [qwen2.5:0.5b]                  # also try smollm2:360m, qwen2.5:1.5b, llama3.2:1b
+heterogeneous: false                    # true = agents cycle through *all* models above
+max_tokens: 256
+temperature: 0.7
+concurrency: 4                          # parallel requests; match llama-server -np / OLLAMA_NUM_PARALLEL
+
+# 4-digit, 3-operand sums put a 0.5B model in the 30-70% band where collaboration can matter.
+task: {digits: 4, operands: 3, questions: 100, seed: 7}
+
+swarm_sizes: [1, 2, 4, 8]
+debate: {rounds: 2, topologies: [full, ring, star]}
+moa: {enabled: true, layers: 2}

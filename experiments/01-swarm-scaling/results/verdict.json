@@ -1,0 +1,172 @@
+{
+ "experiment": "01-swarm-scaling",
+ "hypothesis": "A swarm of N diverse ~100k-parameter models gains capability exponentially in N: majority-vote error falls like exp(-cN) rather than as a power law N^-b.",
+ "verdict": "FAIL",
+ "intriguing": "Error follows a clean power law (~N^-1.4) whose floor is set by shared mistakes: the same members with independent errors would be perfect by N=8.",
+ "mode": "full",
+ "seeds": [
+  0,
+  1,
+  2
+ ],
+ "criteria": [
+  {
+   "id": "C1",
+   "name": "Swarm beats its members",
+   "desc": "Majority vote of 8 different members minus mean single-member accuracy",
+   "metric": "gain_vote8_vs_single",
+   "op": ">=",
+   "threshold": 0.1,
+   "source": "Li et al. 2024 (More Agents Is All You Need) report gains of this size on arithmetic/GSM8K"
+  },
+  {
+   "id": "C2",
+   "name": "Error falls exponentially (the core claim)",
+   "desc": "Exponential fit of log error vs N beats power-law fit (AIC difference, power - exp)",
+   "metric": "aic_power_minus_exp",
+   "op": ">",
+   "threshold": 0.0,
+   "source": "Condorcet jury theorem: independent voters give exponential error decay"
+  },
+  {
+   "id": "C3",
+   "name": "Diversity, not count, drives it",
+   "desc": "8 different members voting minus 1 member sampled 8 times",
+   "metric": "gain_hetero8_vs_homo8",
+   "op": ">=",
+   "threshold": 0.05,
+   "source": "Krogh & Vedelsby 1995: ensemble gain = member diversity (ambiguity)"
+  },
+  {
+   "id": "C4",
+   "name": "Worth the compute",
+   "desc": "Swarm of 4 (greedy vote) minus one member trained 4x longer (same training FLOPs)",
+   "metric": "gain_swarm4_vs_longer4",
+   "op": ">=",
+   "threshold": -0.01,
+   "source": "Compute-matched baseline (Hoffmann et al. 2022 framing); 1-point tolerance"
+  },
+  {
+   "id": "C5",
+   "name": "Adaptive stopping saves calls",
+   "desc": "Adaptive (margin 2) accuracy within 1 pt of fixed N=8, using <= 4 calls/question",
+   "metric": "adaptive_ok",
+   "op": "==",
+   "threshold": 1,
+   "source": "Aggarwal et al. 2023 (Adaptive-Consistency) report 3-6x fewer samples at <0.1 pt loss"
+  }
+ ],
+ "passed": {
+  "main": {
+   "C1": true,
+   "C2": false,
+   "C3": true,
+   "C4": false,
+   "C5": true
+  },
+  "negative": {
+   "C1": false,
+   "C2": true,
+   "C3": false,
+   "C4": null,
+   "C5": true
+  },
+  "weak": {
+   "C1": true,
+   "C2": false,
+   "C3": true,
+   "C4": null,
+   "C5": false
+  },
+  "temperature_1.0": {
+   "C1": true,
+   "C2": false,
+   "C3": true,
+   "C4": null,
+   "C5": true
+  }
+ },
+ "metrics": {
+  "main": {
+   "mean": {
+    "adaptive_calls": 2.818191666666667,
+    "aic_power_minus_exp": -6.120861215593318,
+    "power_law_slope": -1.4437973116391094,
+    "gain_vote8_vs_single": 0.15835312500000018,
+    "gain_swarm4_vs_longer4": -0.015550000000000064,
+    "adaptive_acc": 0.9827833333333333,
+    "gain_hetero8_vs_homo8": 0.12510833333333346,
+    "adaptive_ok": 1
+   },
+   "sd": {
+    "adaptive_calls": 0.19970941424702257,
+    "aic_power_minus_exp": 0.37371183876298447,
+    "power_law_slope": 0.038957136181474165,
+    "gain_vote8_vs_single": 0.03549916839915052,
+    "gain_swarm4_vs_longer4": 0.013664019052484759,
+    "adaptive_acc": 0.002334553252527961,
+    "gain_hetero8_vs_homo8": 0.028897089914999192,
+    "adaptive_ok": 0.0
+   }
+  },
+  "negative": {
+   "mean": {
+    "adaptive_calls": 2.0,
+    "aic_power_minus_exp": 3.6337229121514247,
+    "power_law_slope": 0.005664672632459252,
+    "gain_vote8_vs_single": 0.0,
+    "adaptive_acc": 0.8689666666666667,
+    "gain_hetero8_vs_homo8": 0.0,
+    "adaptive_ok": 1
+   },
+   "sd": {
+    "adaptive_calls": 0.0,
+    "aic_power_minus_exp": 3.9639458838093913,
+    "power_law_slope": 0.09849054695274732,
+    "gain_vote8_vs_single": 0.0,
+    "adaptive_acc": 0.03342230625728202,
+    "gain_hetero8_vs_homo8": 0.0,
+    "adaptive_ok": 0.0
+   }
+  },
+  "weak": {
+   "gain_hetero8_vs_homo8": 0.31262500000000015,
+   "adaptive_calls": 4.640475,
+   "gain_vote8_vs_single": 0.3602375000000003,
+   "adaptive_acc": 0.955975,
+   "aic_power_minus_exp": -12.27905262545108,
+   "power_law_slope": -1.4044287749747182,
+   "adaptive_ok": 0
+  },
+  "temperature_1.0": {
+   "gain_hetero8_vs_homo8": 0.16712499999999997,
+   "adaptive_calls": 3.400349999999999,
+   "gain_vote8_vs_single": 0.24993125000000005,
+   "adaptive_acc": 0.976225,
+   "aic_power_minus_exp": -10.419027136916196,
+   "power_law_slope": -1.5552177104201026,
+   "adaptive_ok": 1
+  }
+ },
+ "longer4_baseline_acc": {
+  "0": 1.0,
+  "1": 0.9825,
+  "2": 0.9925
+ },
+ "runtime_s": 47.740864515304565,
+ "peak_ram_gb": 0.5722236633300781,
+ "disk_mb": 28.946931,
+ "budget": {
+  "peak_ram_gb": 2.0,
+  "disk_mb": 50.0,
+  "full_minutes": 5.0,
+  "quick_seconds": 30.0
+ },
+ "env": {
+  "python": "3.13.18",
+  "torch": "2.15.0+cu132",
+  "numpy": "2.5.3",
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz (4 threads)",
+  "os": "Linux-6.18.44-fc-v236-x86_64-with-glibc2.39"
+ }
+}
