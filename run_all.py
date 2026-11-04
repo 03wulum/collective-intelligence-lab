@@ -2,6 +2,7 @@
 
     python run_all.py          # --quick for each experiment (CI)
     python run_all.py --full   # full runs
+    python run_all.py --clean  # delete every experiment's caches and report the space freed
 """
 from __future__ import annotations
 
@@ -17,9 +18,15 @@ ROOT = Path(__file__).resolve().parent
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", action="store_true")
+    ap.add_argument("--clean", action="store_true")
     a = ap.parse_args()
+    if a.clean:
+        for exp in sorted((ROOT / "experiments").glob("*/")):
+            if (exp / "run.py").exists():
+                subprocess.run([sys.executable, "run.py", "--clean"], cwd=exp)
+        return
     rows, failed = [], False
-    for exp in sorted((ROOT / "experiments").iterdir()):
+    for exp in sorted((ROOT / "experiments").glob("*/")):
         if not (exp / "run.py").exists():
             continue
         cmd = [sys.executable, "run.py"] + ([] if a.full else ["--quick"])
@@ -31,7 +38,7 @@ def main():
             failed = True
             continue
         v = json.load(open(vfile))
-        rows.append((exp.name, v["verdict"], f"{v['runtime_s']:.0f}s, {v['peak_ram_gb']:.2f} GB RAM"))
+        rows.append((exp.name, v["verdict"] + (" ✨" if v.get("intriguing") else ""), f"{v['runtime_s']:.0f}s, {v['peak_ram_gb']:.2f} GB RAM"))
     print("\n" + "-" * 72)
     print(f"{'experiment':<28} {'verdict':<16} cost   ({'full' if a.full else 'quick'} mode)")
     for name, verdict, cost in rows:

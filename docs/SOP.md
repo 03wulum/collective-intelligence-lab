@@ -1,8 +1,8 @@
-# Experiment SOP v0.2 (draft)
+# Experiment SOP v0.6 (draft)
 
-> Copy of the canonical SOP in `tiny-inference-lab/docs/SOP.md`, version v0.2, copied 2026-11-04.
+> Copy of the canonical SOP in `tiny-inference-lab/docs/SOP.md`, version v0.6, copied 2026-11-04.
 
-Every experiment is a small, honest, one-command test of a recent paper's claim. It runs on a laptop CPU, and its pass/fail criteria are fixed before any code is written. One theme runs through all of it: how much intelligence fits in very little space.
+Every experiment is a small, honest, one-command test of a recent paper's claim. Training runs on Fortran's NVIDIA GPU, evaluation runs anywhere, and its pass/fail criteria are fixed before any code is written. One theme runs through all of it: how much intelligence fits in very little space.
 
 ## 1. Principles
 
@@ -56,23 +56,36 @@ Before any code, the thread posts this plan to Obi and gets a go-ahead:
 
 | Verdict | Meaning |
 | --- | --- |
-| CONFIRMED | All criteria pass and the negative control fails |
-| PARTIAL | Some criteria pass |
-| NOT CONFIRMED | The main criteria fail |
-| INVALID | The negative control passed, so the test can't tell |
+| PASS | All pre-registered criteria pass and the negative control fails |
+| FAIL | The core criterion fails |
+| INCONCLUSIVE | Mixed results, or the negative control passed so the test can't tell |
+| ✨ INTRIGUING (optional tag) | Added beside any verdict when something unexpected turned up or results beat expectations, with a one-line note. It never changes the verdict |
 
-Two layers, kept apart: `pytest` checks that the code is correct and must always be green. The verdict checks the paper's claim, and NOT CONFIRMED is a valid result that does not break CI. CI fails only on a failing code test, a crash, or a blown budget.
+Two layers, kept apart: `pytest` checks that the code is correct and must always be green. The verdict checks the paper's claim, and FAIL is a valid result that does not break CI. CI fails only on a failing code test, a crash, or a blown budget.
 
 ## 5. Reproducibility and budgets
 
 - **One command:** `python run.py` reproduces every number and plot. `--quick` finishes in under 30 s and is what CI and `run_all.py` use. A full run stays under 5 minutes on a laptop CPU, with no GPU.
-- **Size budget:** declared in `criteria.py` and measured by `run.py` (peak RAM, bytes on disk for models and data). Defaults: peak RAM ≤ 2 GB, disk ≤ 1 GB per experiment, and the smaller the better.
-- **Training** a tiny model is fine when it fits: ≤ 10 minutes on CPU, inside the size budget.
+- **Size budget:** declared in `criteria.py` and measured by `run.py` (peak RAM, bytes on disk for models and data). Defaults: peak RAM ≤ 2 GB; everything kept (trained models, checkpoints) ≤ 50 MB combined, and ≤ 20 MB for the learn-while-prompted line; temporary downloads ≤ 2 GB per experiment, deleted by `--clean` when done. Big reference models are compared by their published scores, never downloaded.
+- **Training** a tiny model is fine when it fits: ≤ 15 minutes per experiment (20 at most), inside the size budget. Training never runs on CPU: it runs on Fortran's NVIDIA GPU through Remote Control and uses as much free GPU capacity as is available (largest batch that fits, mixed precision) to cut the time. Every experiment uses the GPU for at least some of its work. train.py saves checkpoints, so run.py --quick and CI only load them and evaluate. The aim is training and inference that both finish in minutes.
 - **Seeds:** `--seed`, default 0, recorded in results. Separate RNG streams for data and for the method's own randomness. Headline comparisons report mean ± std over at least 3 seeds.
 - **Pins:** exact `==` versions, Python version stated (currently 3.12), Hugging Face models pinned to a revision hash.
 - **results.md header:** seed, quick flag, runtime, peak RAM, disk used, Python and library versions, CPU model.
 
 ## 6. README template (public)
+
+READMEs are short and lead with what happened. Detail goes into each experiment's own docs (`EXPLAINER.md`, `results/results.md`, and an optional `docs/` folder).
+
+**Top-level repo README:** a `## Results` section right under the one-line intro, with one row per experiment:
+
+```markdown
+## Results
+| # | Goal | Verdict | Criteria | Finding in one line | |
+| 01 | Shrink the KV cache 5x with no calibration | PASS | 3/3 | Attention KL 0.15 vs 0.49 for the usual method | [details](experiments/01-.../) |
+| 02 | Exponential gains from swarms of tiny models | FAIL ✨ INTRIGUING | 3/5 | Gains follow a power law; diversity, not count, drives them | [details](...) |
+```
+
+**Experiment README:** opens with the goal in one line, then the verdict (PASS, FAIL or INCONCLUSIVE, plus any ✨ INTRIGUING note), then a Details link, then the PASS/FAIL table. A reader knows in ten seconds what happened. Keep it to about one screen on a phone, and link to the docs for method, controls and full tables.
 
 ```markdown
 # NN · <Method>: <one-line claim in plain words>
@@ -85,7 +98,7 @@ Two layers, kept apart: `pytest` checks that the code is correct and must always
 
 ## Hypothesis and pass criteria
 | # | Criterion | Threshold | Result | PASS/FAIL |
-Overall verdict: CONFIRMED / PARTIAL / NOT CONFIRMED / INVALID
+**Goal:** one line. **Verdict:** PASS / FAIL / INCONCLUSIVE (+ ✨ INTRIGUING). [Details](docs/)
 
 ## Controls
 Baseline, negative control, and which criteria survived each perturbation.
@@ -109,16 +122,18 @@ The README states the hardware the timings came from.
 
 - Install only into the repo's own `.venv`. Never `sudo`, system-wide `pip`, or `curl | sh`.
 - Use well-known packages from PyPI, with exact pins. Every new dependency gets a one-line reason in the PR.
-- Download models and data only from Hugging Face or the paper's official source, at a pinned revision, and never run downloaded code (`trust_remote_code=False`).
+- Download models and data only from open-licensed sources (Hugging Face, PyPI, the paper's official release; Apache, MIT, CC-BY or similar), at a pinned revision, with the size checked before downloading, and never run downloaded code (`trust_remote_code=False`).
 - Everything downloaded goes into a git-ignored `data/` folder, and `python run.py --clean` deletes it.
 - Never write outside the repo and never leave background processes running.
+
+**Cleanup when an experiment is done.** Nothing piles up on Fortran. After the final run, `python run_all.py --clean` (or `python run.py --clean` in one experiment) deletes temporary downloads, datasets, caches (pip, Hugging Face, torch), the experiment's `.venv` and intermediate checkpoints. Only the committed ≤ 50 MB artifacts and `results/` stay. The command prints the disk space it freed, and that number goes in the PR and the thread's final report.
 
 ## 8. Results and plots
 
 - Tables in `results/results.md`; the README copies only the headline table.
 - Plots: PNG, matplotlib, 150 dpi, readable on a phone (labels ≥ 11 pt, one message per plot, title states the takeaway, units on axes). Baseline in gray, the paper's method in one accent color.
 - Where size is the variable, plot quality against size, with the budget line marked.
-- Report negative or surprising results plainly. A NOT CONFIRMED with a good explanation is a portfolio asset.
+- Report negative or surprising results plainly. A FAIL with a good explanation is a portfolio asset.
 
 ## 9. Explainer for Obi
 
@@ -147,7 +162,7 @@ It comes with a draft post of up to 280 characters: the finding with its number,
 - Conventional commits: `exp(01): ...`, `fix(01): ...`, `docs: ...`, `ci: ...`, `sop: ...`.
 - One experiment per PR, titled `Experiment NN: <method> (<verdict>)`.
 - PR body: paper link, the criteria table with the verdict, runtime and size, limitations, post-readiness and the draft post.
-- `main` always runs. The same PR updates the repo index and `run_all.py`.
+- `main` always runs. The same PR updates the repo index, the project index (§16) and `run_all.py`.
 
 ## 12. Per-experiment checklist
 
@@ -161,6 +176,7 @@ It comes with a draft post of up to 280 characters: the finding with its number,
 - [ ] Added to `run_all.py` and the repo index
 - [ ] CI green; PR opened with the standard title and body
 - [ ] Post-readiness verdict and draft post sent to Obi
+- [ ] Cleanup run on Fortran (`--clean`); disk space freed reported to Obi
 
 ## 13. Creating a new repo
 
@@ -183,7 +199,16 @@ Claude may message Obi with new papers or ideas that fit the theme, one short no
 - **Changing the SOP:** proposed in the project chat or a `sop/<what>` PR that edits `docs/SOP.md`, with a version bump and a changelog line. Existing experiments are brought up to date only when the change affects correctness or the pass/fail verdict.
 - **Canonical copy:** `docs/SOP.md` in `tiny-inference-lab`; other topic repos copy it and note the version.
 
+## 16. Project index
+
+One Project index (a shared doc) lists every repo and experiment with its status, verdict, key numbers and links. Every thread updates its row when a plan is posted, an experiment finishes, or a repo goes live. When a fact is needed fast, look there first.
+
 ## Changelog
+
+- v0.6 (2026-11-04): verdicts are PASS / FAIL / INCONCLUSIVE, with an optional ✨ INTRIGUING tag; every README row and experiment README opens with goal, verdict, details link.
+- v0.5 (2026-11-04): short READMEs that lead with results (§6): a top-level Results table showing what passed, with detail moved to each experiment's docs.
+- v0.4 (2026-11-04): cleanup after every experiment (§7), with a `--clean` command that reports the space freed, plus a final checklist step.
+- v0.3 (2026-11-04): training ≤ 15 min (20 max) on the GPU only, never CPU, ≤ 50 MB kept artifacts (≤ 20 MB for learn-while-prompted), ≤ 2 GB temporary downloads, open-licensed sources only, project index (§16).
 
 - v0.2 (2026-11-04): pre-registered pass criteria with PASS/FAIL verdicts, negative controls and perturbations, size budgets as a first-class variable, the explainer for Obi, post-readiness, safety rules, `run_all.py`, new-ideas notes.
 - v0.1 (2026-11-04): first draft, plus the repo-creation process.
