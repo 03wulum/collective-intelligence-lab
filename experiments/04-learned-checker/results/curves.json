@@ -1,0 +1,212 @@
+[
+  {
+    "seed": 0,
+    "n4": {
+      "single": 0.5486187499999999,
+      "vote": 0.8017,
+      "judge": 0.3889,
+      "shuffled_judge": 0.38055,
+      "pass": 0.9695250000000002
+    },
+    "n8": {
+      "single": 0.5477062500000001,
+      "vote": 0.9565750000000002,
+      "judge": 0.19685,
+      "shuffled_judge": 0.18995,
+      "pass": 0.9987500000000001
+    },
+    "judge_auc": 0.6107839720622246,
+    "shuffled_auc": 0.4886786676380028,
+    "t1_n4": {
+      "single": 0.51504375,
+      "vote": 0.7412500000000002,
+      "judge": 0.36647499999999994,
+      "shuffled_judge": 0.3471,
+      "pass": 0.95505
+    },
+    "weak_n4": {
+      "single": 0.3899000000000001,
+      "vote": 0.548825,
+      "judge": 0.26987500000000003,
+      "shuffled_judge": 0.26760000000000006,
+      "pass": 0.8747749999999997
+    },
+    "matched_acc": 0.9975,
+    "matched_steps": 8000,
+    "judge_train_pos_neg": [
+      35272,
+      28728
+    ],
+    "metrics": {
+      "gap_closed_n4": -2.459705049903169,
+      "gain_judge4_vs_matched": -0.6086,
+      "judge_size_ratio": 0.992449834961136,
+      "gap_closed_weak_n4": -0.8558061052308642
+    },
+    "negative": {
+      "gap_closed_n4": -2.5094592581558137,
+      "gain_judge4_vs_matched": -0.6169500000000001,
+      "judge_size_ratio": 0.992449834961136,
+      "gap_closed_weak_n4": -0.862785703328732
+    },
+    "perturb": {
+      "N=8": {
+        "gap_closed_n4": -18.01363366923535,
+        "gain_judge4_vs_matched": -0.6086,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.8558061052308642
+      },
+      "temperature 1.0": {
+        "gap_closed_n4": -1.7529232927970095,
+        "gain_judge4_vs_matched": -0.6310250000000002,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.8558061052308642
+      }
+    },
+    "params": {
+      "member": 103309,
+      "judge": 102529
+    },
+    "train_seconds": 38.19163950284322
+  },
+  {
+    "seed": 1,
+    "n4": {
+      "single": 0.4615687499999999,
+      "vote": 0.632675,
+      "judge": 0.32662499999999994,
+      "shuffled_judge": 0.3215,
+      "pass": 0.9091250000000001
+    },
+    "n8": {
+      "single": 0.4578781249999999,
+      "vote": 0.8784500000000002,
+      "judge": 0.15405,
+      "shuffled_judge": 0.1459,
+      "pass": 0.9954500000000001
+    },
+    "judge_auc": 0.6464806415103926,
+    "shuffled_auc": 0.4586668641050293,
+    "t1_n4": {
+      "single": 0.410075,
+      "vote": 0.554725,
+      "judge": 0.28120000000000006,
+      "shuffled_judge": 0.2848,
+      "pass": 0.88375
+    },
+    "weak_n4": {
+      "single": 0.37047499999999983,
+      "vote": 0.48584999999999995,
+      "judge": 0.2756,
+      "shuffled_judge": 0.257975,
+      "pass": 0.8035500000000002
+    },
+    "matched_acc": 1.0,
+    "matched_steps": 8000,
+    "judge_train_pos_neg": [
+      29737,
+      34263
+    ],
+    "metrics": {
+      "gap_closed_n4": -1.1070718032193885,
+      "gain_judge4_vs_matched": -0.6733750000000001,
+      "judge_size_ratio": 0.992449834961136,
+      "gap_closed_weak_n4": -0.6617878501731186
+    },
+    "negative": {
+      "gap_closed_n4": -1.1256104177970696,
+      "gain_judge4_vs_matched": -0.6785,
+      "judge_size_ratio": 0.992449834961136,
+      "gap_closed_weak_n4": -0.7172647151400685
+    },
+    "perturb": {
+      "N=8": {
+        "gap_closed_n4": -6.191452991452999,
+        "gain_judge4_vs_matched": -0.6733750000000001,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.6617878501731186
+      },
+      "temperature 1.0": {
+        "gap_closed_n4": -0.8313198085251879,
+        "gain_judge4_vs_matched": -0.7187999999999999,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.6617878501731186
+      }
+    },
+    "params": {
+      "member": 103309,
+      "judge": 102529
+    },
+    "train_seconds": 38.19163950284322
+  },
+  {
+    "seed": 2,
+    "n4": {
+      "single": 0.5510562499999999,
+      "vote": 0.766175,
+      "judge": 0.415025,
+      "shuffled_judge": 0.3917,
+      "pass": 0.9555250000000001
+    },
+    "n8": {
+      "single": 0.555978125,
+      "vote": 0.91655,
+      "judge": 0.230175,
+      "shuffled_judge": 0.20535,
+      "pass": 0.992875
+    },
+    "judge_auc": 0.6574301428212316,
+    "shuffled_auc": 0.4171274009270267,
+    "t1_n4": {
+      "single": 0.50711875,
+      "vote": 0.701725,
+      "judge": 0.39052499999999996,
+      "shuffled_judge": 0.35195,
+      "pass": 0.9285000000000001
+    },
+    "weak_n4": {
+      "single": 0.29585625,
+      "vote": 0.403825,
+      "judge": 0.23455000000000006,
+      "shuffled_judge": 0.21457500000000004,
+      "pass": 0.7563000000000001
+    },
+    "matched_acc": 1.0,
+    "matched_steps": 8000,
+    "judge_train_pos_neg": [
+      35535,
+      28465
+    ],
+    "metrics": {
+      "gap_closed_n4": -1.854502244520729,
+      "gain_judge4_vs_matched": -0.584975,
+      "judge_size_ratio": 0.992449834961136,
+      "gap_closed_weak_n4": -0.4802468260160292
+    },
+    "negative": {
+      "gap_closed_n4": -1.9776868233430156,
+      "gain_judge4_vs_matched": -0.6083000000000001,
+      "judge_size_ratio": 0.992449834961136,
+      "gap_closed_weak_n4": -0.5369175118802749
+    },
+    "perturb": {
+      "N=8": {
+        "gap_closed_n4": -8.992793973141175,
+        "gain_judge4_vs_matched": -0.584975,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.4802468260160292
+      },
+      "temperature 1.0": {
+        "gap_closed_n4": -1.3722853048175505,
+        "gain_judge4_vs_matched": -0.609475,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.4802468260160292
+      }
+    },
+    "params": {
+      "member": 103309,
+      "judge": 102529
+    },
+    "train_seconds": 38.19163950284322
+  }
+]

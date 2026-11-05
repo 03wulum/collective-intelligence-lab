@@ -1,0 +1,43 @@
+2026-11-05 08:28:24  [collective 04] started in slot 2/2, pid 23748 on 14 cores: .venv\Scripts\python.exe run.py
+2026-11-05 08:28:30  [collective 04] running, RAM 76%, job 0.6 GB, 2 proc
+2026-11-05 08:29:30  [collective 04] running, RAM 79%, job 1.2 GB, 2 proc
+2026-11-05 08:30:31  [collective 04] running, RAM 71%, job 1.4 GB, 2 proc
+experiment 04 · full · cuda (NVIDIA GeForce RTX 4080 SUPER)
+members trained: normal 13s, weak 10s, matched (8000 steps) 75s
+judges trained (6): 17s
+seed 0: vote 0.802 judge 0.389 pass 0.970 matched 0.998 weak vote 0.549 judge 0.270 
+seed 1: vote 0.633 judge 0.327 pass 0.909 matched 1.000 weak vote 0.486 judge 0.276 
+seed 2: vote 0.766 judge 0.415 pass 0.956 matched 1.000 weak vote 0.404 judge 0.235 
+
+MAIN (mean over seeds)
+ID  criterion                              value        need  result
+C1  The judge closes the gap (core)       -1.807       >=0.5  FAIL
+C2  Worth the compute                     -0.622     >=-0.01  FAIL
+C3  Tiny and cheap                         0.992       <=1.0  PASS
+C4  Transfers to weaker members           -0.666       >=0.3  FAIL
+
+NEGATIVE CONTROL: shuffled-label judge (C1 must FAIL)
+ID  criterion                              value        need  result
+C1  The judge closes the gap (core)       -1.871       >=0.5  FAIL
+C2  Worth the compute                     -0.635     >=-0.01  FAIL
+C3  Tiny and cheap                         0.992       <=1.0  PASS
+C4  Transfers to weaker members           -0.706       >=0.3  FAIL
+
+PERTURBATION: N=8
+ID  criterion                              value        need  result
+C1  The judge closes the gap (core)      -11.066       >=0.5  FAIL
+C2  Worth the compute                     -0.622     >=-0.01  FAIL
+C3  Tiny and cheap                         0.992       <=1.0  PASS
+C4  Transfers to weaker members           -0.666       >=0.3  FAIL
+
+PERTURBATION: temperature 1.0
+ID  criterion                              value        need  result
+C1  The judge closes the gap (core)       -1.319       >=0.5  FAIL
+C2  Worth the compute                     -0.653     >=-0.01  FAIL
+C3  Tiny and cheap                         0.992       <=1.0  PASS
+C4  Transfers to weaker members           -0.666       >=0.3  FAIL
+
+budget: {"train_minutes": 1.91, "peak_ram_gb": 1.549, "disk_mb": 23.578, "wall_minutes": 2.54, "device": "cuda NVIDIA GeForce RTX 4080 SUPER"} ok={'train_minutes': True, 'peak_ram_gb': True, 'disk_mb': True}
+
+VERDICT: FAIL
+2026-11-05 08:31:02  [collective 04] finished, exit code 0, 2 min
