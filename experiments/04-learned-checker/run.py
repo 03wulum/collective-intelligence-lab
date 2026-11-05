@@ -323,6 +323,7 @@ def main():
          "hypothesis": criteria.HYPOTHESIS, "main": main_p, "metrics": metrics,
          "metric_stats": {k: mean_std([r["metrics"][k] for r in runs]) for k in metrics},
          "negative": neg_p, "negative_metrics": neg, "perturbations": perturb,
+         "runtime_s": budget["wall_minutes"] * 60, "peak_ram_gb": budget["peak_ram_gb"],
          "budget": budget, "budget_ok": budget_ok, "criteria": criteria.CRITERIA,
          "python": platform.python_version(), "torch": torch.__version__}
     (RESULTS / f"verdict{sfx}.json").write_text(json.dumps(v, indent=2), encoding="utf-8")
@@ -334,7 +335,8 @@ def main():
     except Exception as e:  # plots never break a run
         print(f"plot skipped: {e}")
     if not all(budget_ok.values()):
-        sys.exit("budget exceeded")
+        print("budget exceeded", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
