@@ -43,7 +43,7 @@ PRESETS = {
 }
 MEMBER_BS = 64
 TEMPERATURE = 0.7
-INTRIGUING = None  # optional SOP v0.6 tag, set only after results exist; never changes the verdict
+INTRIGUING = None  # optional SOP v0.6 tag; none for this run
 
 
 # ----------------------------------------------------------------------------- cached training
@@ -268,7 +268,7 @@ def write_md(path, v, runs):
     b = v["budget"]
     L += ["", f"Budget: training {b['train_minutes']:.1f} min on {b['device']}, peak RAM {b['peak_ram_gb']:.2f} GB, "
           f"models {b['disk_mb']:.1f} MB, wall {b['wall_minutes']:.1f} min"]
-    path.write_text("\n".join(L) + "\n")
+    path.write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
 def main():
@@ -325,8 +325,8 @@ def main():
          "negative": neg_p, "negative_metrics": neg, "perturbations": perturb,
          "budget": budget, "budget_ok": budget_ok, "criteria": criteria.CRITERIA,
          "python": platform.python_version(), "torch": torch.__version__}
-    (RESULTS / f"verdict{sfx}.json").write_text(json.dumps(v, indent=2))
-    (RESULTS / f"curves{sfx}.json").write_text(json.dumps(runs, indent=2, default=float))
+    (RESULTS / f"verdict{sfx}.json").write_text(json.dumps(v, indent=2), encoding="utf-8")
+    (RESULTS / f"curves{sfx}.json").write_text(json.dumps(runs, indent=2, default=float), encoding="utf-8")
     write_md(RESULTS / f"results{sfx}.md", v, runs)
     try:
         import plots
