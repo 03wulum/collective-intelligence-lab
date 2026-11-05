@@ -1,0 +1,131 @@
+{
+  "experiment": "04-learned-checker",
+  "preset": "full",
+  "verdict": "FAIL",
+  "intriguing": null,
+  "hypothesis": "A tiny judge (no bigger than one swarm member) trained to tell right sums from wrong ones picks the correct candidate from a 4-member swarm far more often than a majority vote, closing at least half of the vote -> pass@4 gap.",
+  "main": {
+    "C1": false,
+    "C2": false,
+    "C3": true,
+    "C4": false
+  },
+  "metrics": {
+    "gap_closed_n4": -1.807093032547762,
+    "gain_judge4_vs_matched": -0.6223166666666667,
+    "judge_size_ratio": 0.992449834961136,
+    "gap_closed_weak_n4": -0.6659469271400039
+  },
+  "metric_stats": {
+    "gap_closed_n4": [
+      -1.807093032547762,
+      0.5532268371674797
+    ],
+    "gain_judge4_vs_matched": [
+      -0.6223166666666667,
+      0.03736977574041474
+    ],
+    "judge_size_ratio": [
+      0.992449834961136,
+      0.0
+    ],
+    "gap_closed_weak_n4": [
+      -0.6659469271400039,
+      0.15334963643474772
+    ]
+  },
+  "negative": {
+    "C1": false,
+    "C2": false,
+    "C3": true,
+    "C4": false
+  },
+  "negative_metrics": {
+    "gap_closed_n4": -1.870918833098633,
+    "gain_judge4_vs_matched": -0.6345833333333334,
+    "judge_size_ratio": 0.992449834961136,
+    "gap_closed_weak_n4": -0.7056559767830252
+  },
+  "perturbations": {
+    "N=8": {
+      "metrics": {
+        "gap_closed_n4": -11.06596021127651,
+        "gain_judge4_vs_matched": -0.6223166666666667,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.6659469271400039
+      },
+      "passed": {
+        "C1": false,
+        "C2": false,
+        "C3": true,
+        "C4": false
+      }
+    },
+    "temperature 1.0": {
+      "metrics": {
+        "gap_closed_n4": -1.3188428020465828,
+        "gain_judge4_vs_matched": -0.6531,
+        "judge_size_ratio": 0.992449834961136,
+        "gap_closed_weak_n4": -0.6659469271400039
+      },
+      "passed": {
+        "C1": false,
+        "C2": false,
+        "C3": true,
+        "C4": false
+      }
+    }
+  },
+  "budget": {
+    "train_minutes": 1.909581975142161,
+    "peak_ram_gb": 1.548787712,
+    "disk_mb": 23.578328,
+    "wall_minutes": 2.5402333895365397,
+    "device": "cuda NVIDIA GeForce RTX 4080 SUPER"
+  },
+  "budget_ok": {
+    "train_minutes": true,
+    "peak_ram_gb": true,
+    "disk_mb": true
+  },
+  "criteria": [
+    {
+      "id": "C1",
+      "name": "The judge closes the gap (core)",
+      "desc": "Share of the vote@4 -> pass@4 gap closed by judge selection at N=4",
+      "metric": "gap_closed_n4",
+      "op": ">=",
+      "threshold": 0.5,
+      "source": "Cobbe et al. 2021: trained verifiers recover most of best-of-N coverage"
+    },
+    {
+      "id": "C2",
+      "name": "Worth the compute",
+      "desc": "Swarm of 4 + judge minus one model trained on the same total tokens (judge counted)",
+      "metric": "gain_judge4_vs_matched",
+      "op": ">=",
+      "threshold": -0.01,
+      "source": "Experiment 01 C4 (failed by 1.6 pts); 1-point tolerance"
+    },
+    {
+      "id": "C3",
+      "name": "Tiny and cheap",
+      "desc": "Judge parameters / member parameters (and one forward pass per distinct candidate)",
+      "metric": "judge_size_ratio",
+      "op": "<=",
+      "threshold": 1.0,
+      "source": "Experiment design: the judge must be no bigger than one member"
+    },
+    {
+      "id": "C4",
+      "name": "Transfers to weaker members",
+      "desc": "Gap closed at N=4 on weak members (fewer training steps), judge not retrained",
+      "metric": "gap_closed_weak_n4",
+      "op": ">=",
+      "threshold": 0.3,
+      "source": "Generalisation check; a lower bar than C1 because the judge never saw these members"
+    }
+  ],
+  "python": "3.12.10",
+  "torch": "2.14.1+cu126"
+}
